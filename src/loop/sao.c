@@ -2,12 +2,19 @@
 
 #include "hevc/common/integer_spec.h"
 
-static int32_t sign_of(int32_t value)
+#include <stdint.h>
+
+/* Sign of a - b. The subtraction is widened so the two samples cannot
+ * overflow a signed 32-bit difference. */
+static int32_t sign_of_diff(int32_t left, int32_t right)
 {
-    if (value > 0) {
+    int64_t diff;
+
+    diff = (int64_t)left - (int64_t)right;
+    if (diff > 0) {
         return 1;
     }
-    if (value < 0) {
+    if (diff < 0) {
         return -1;
     }
     return 0;
@@ -18,7 +25,7 @@ int32_t hevc_sao_edge_category(int32_t center, int32_t neighbour0, int32_t neigh
 {
     int32_t edge;
 
-    edge = 2 + sign_of(center - neighbour0) + sign_of(center - neighbour1);
+    edge = 2 + sign_of_diff(center, neighbour0) + sign_of_diff(center, neighbour1);
     /* Categories 0, 1, and 2 are remapped. A raw 2 is a slope and becomes
      * the no-offset category. A raw 0 is a local minimum and becomes 1. */
     if (edge == 0 || edge == 1 || edge == 2) {
@@ -37,10 +44,11 @@ int32_t hevc_sao_band_category(int32_t sample, int32_t bit_depth, int32_t left_c
     int32_t band;
     int32_t k;
 
-    if (bit_depth < 8 || bit_depth > 16) {
+    if (bit_depth < 8 || bit_depth > 16 || sample < 0) {
         return 0;
     }
-    /* 8-bit samples shift by 3, which splits the range into 32 bands. */
+    /* 8-bit samples shift by 3, which splits the range into 32 bands.
+     * sample is non-negative, so the shift is a logical divide. */
     shift = bit_depth - 5;
     band = sample >> shift;
     for (k = 0; k < 4; k++) {
@@ -66,7 +74,20 @@ int32_t hevc_sao_edge_sign(int32_t category_slot)
 int32_t hevc_sao_apply(int32_t sample, int32_t offset, int32_t bit_depth)
 {
     int32_t max_sample;
+    int64_t sum;
 
+    if (bit_depth < 8 || bit_depth > 16) {
+        return 0;
+    }
+    /* The shift is 8..16, so the maximum sample fits in a signed word. */
     max_sample = (1 << bit_depth) - 1;
-    return hevc_clip3(0, max_sample, sample + offset);
+    /* sample + offset is widened. A wrapped sum would clip the wrong way. */
+    sum = (int64_t)sample + (int64_t)offset;
+    if (sum < 0) {
+        return 0;
+    }
+    if (sum > max_sample) {
+        return max_sample;
+    }
+    return (int32_t)sum;
 }

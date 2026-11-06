@@ -36,15 +36,33 @@ static int32_t clip_sample(int32_t value, int32_t bit_depth)
     return hevc_clip3(0, max_sample, value);
 }
 
-/* ref_at reads the biased reference array. index may be negative. */
-static int32_t ref_at(const int32_t *ref, int32_t index)
+/* The stored reference covers indices -32..64. Anything else is a bug
+ * in the projection, not a sample that may be read off the array. */
+static int32_t ref_index_ok(int32_t index)
 {
-    return ref[index + k_ref_bias];
+    if (index < -k_ref_bias || index > 64) {
+        return 0;
+    }
+    return 1;
 }
 
-static void ref_put(int32_t *ref, int32_t index, int32_t sample)
+/* ref_at reads the biased reference array. index may be negative. */
+static HevcStatus ref_at(const int32_t *ref, int32_t index, int32_t *sample)
 {
+    if (ref_index_ok(index) == 0) {
+        return HEVC_ERR_RANGE;
+    }
+    *sample = ref[index + k_ref_bias];
+    return HEVC_OK;
+}
+
+static HevcStatus ref_put(int32_t *ref, int32_t index, int32_t sample)
+{
+    if (ref_index_ok(index) == 0) {
+        return HEVC_ERR_RANGE;
+    }
     ref[index + k_ref_bias] = sample;
+    return HEVC_OK;
 }
 
 /* Build the 1/32-sample reference for a projection that starts on the main
@@ -52,24 +70,31 @@ static void ref_put(int32_t *ref, int32_t index, int32_t sample)
  * main_is_top is 1 when mode >= 18. The main arm then supplies positive
  * indices and the left arm supplies negative indices.
  */
-static void build_ref(int32_t n,
-                      int32_t angle,
-                      int32_t inv_angle,
-                      int32_t main_is_top,
-                      const int32_t *left,
-                      const int32_t *top,
-                      int32_t *ref)
+static HevcStatus build_ref(int32_t n,
+                             int32_t angle,
+                             int32_t inv_angle,
+                             int32_t main_is_top,
+                             const int32_t *left,
+                             const int32_t *top,
+                             int32_t *ref)
 {
     int32_t x;
     int32_t last;
+    HevcStatus status;
 
     /* ref[0] is the corner. ref[1] .. ref[n] are the n samples beside the block. */
-    ref_put(ref, 0, left[0]);
+    status = ref_put(ref, 0, left[0]);
+    if (status != HEVC_OK) {
+        return status;
+    }
     for (x = 1; x <= n; x++) {
         if (main_is_top == 1) {
-            ref_put(ref, x, top[x - 1]);
+            status = ref_put(ref, x, top[x - 1]);
         } else {
-            ref_put(ref, x, left[x]);
+            status = ref_put(ref, x, left[x]);
+        }
+        if (status != HEVC_OK) {
+            return status;
         }
     }
 
@@ -77,13 +102,16 @@ static void build_ref(int32_t n,
         /* The extension continues along the same arm out to 2n. */
         for (x = n + 1; x <= n * 2; x++) {
             if (main_is_top == 1) {
-                ref_put(ref, x, top[x - 1]);
+                status = ref_put(ref, x, top[x - 1]);
             } else {
                 /* left[x] is y = x - 1, which is p[-1][-1 + x]. */
-                ref_put(ref, x, left[x]);
+                status = ref_put(ref, x, left[x]);
+            }
+            if (status != HEVC_OK) {
+                return status;
             }
         }
-        return;
+        return HEVC_OK;
     }
 
     last = hevc_floor_div_pow2(n * angle, 5);
@@ -96,20 +124,30 @@ static void build_ref(int32_t n,
 
             /* x and inv_angle are both negative, so the product is positive.
              * The +128 rounds the divide by 256. */
+            /* Both factors are negative, so the product is positive and
+             * fits: the largest pair this table forms is 32 * 4096. */
             pos = ((x * inv_angle) + 128) >> 8;
             sample_y = -1 + pos;
+            /* The borrowed arm is 2n samples. An index past it is not read. */
+            if (sample_y < 0 || sample_y >= n * 2) {
+                return HEVC_ERR_RANGE;
+            }
             if (main_is_top == 1) {
                 /* Negative top indices come from the left column. */
-                ref_put(ref, x, left[sample_y + 1]);
+                status = ref_put(ref, x, left[sample_y + 1]);
             } else {
-                ref_put(ref, x, top[sample_y]);
+                status = ref_put(ref, x, top[sample_y]);
+            }
+            if (status != HEVC_OK) {
+                return status;
             }
         }
     }
+    return HEVC_OK;
 }
 
-static void project(int32_t n, int32_t angle, int32_t main_is_top,
-                    const int32_t *ref, int32_t *pred)
+static HevcStatus project(int32_t n, int32_t angle, int32_t main_is_top,
+                           const int32_t *ref, int32_t *pred)
 {
     int32_t row;
     int32_t col;
@@ -122,6 +160,7 @@ static void project(int32_t n, int32_t angle, int32_t main_is_top,
             int32_t i_fact;
             int32_t base;
             int32_t sample;
+            HevcStatus status;
 
             /* Mode >= 18 displaces by the row. Mode < 18 displaces by the column. */
             if (main_is_top == 1) {
@@ -142,19 +181,32 @@ static void project(int32_t n, int32_t angle, int32_t main_is_top,
                 base = row + i_idx + 1;
             }
             if (i_fact == 0) {
-                sample = ref_at(ref, base);
+                status = ref_at(ref, base, &sample);
+                if (status != HEVC_OK) {
+                    return status;
+                }
             } else {
                 int32_t near;
                 int32_t far;
+                int64_t mixed;
 
-                near = ref_at(ref, base);
-                far = ref_at(ref, base + 1);
-                /* (32 - fraction) * near + fraction * far, rounded divide by 32. */
-                sample = ((32 - i_fact) * near + i_fact * far + 16) >> 5;
+                status = ref_at(ref, base, &near);
+                if (status != HEVC_OK) {
+                    return status;
+                }
+                status = ref_at(ref, base + 1, &far);
+                if (status != HEVC_OK) {
+                    return status;
+                }
+                /* (32 - fraction) * near + fraction * far, rounded divide by 32.
+                 * The products are widened so two large samples cannot wrap. */
+                mixed = (int64_t)(32 - i_fact) * (int64_t)near + (int64_t)i_fact * (int64_t)far + 16;
+                sample = (int32_t)(mixed >> 5);
             }
             pred[row * n + col] = sample;
         }
     }
+    return HEVC_OK;
 }
 
 /* Project modes 2..34 and rewrite the mode 10 or 26 edge when required. */
@@ -173,6 +225,8 @@ HevcStatus hevc_intra_predict_angular(int32_t n,
     int32_t ref[97];
     int32_t y;
     int32_t x;
+    int32_t i;
+    HevcStatus status;
 
     if (left == NULL || top == NULL || pred == NULL) {
         return HEVC_ERR_ARG;
@@ -195,8 +249,19 @@ HevcStatus hevc_intra_predict_angular(int32_t n,
         main_is_top = 0;
     }
 
-    build_ref(n, angle, inv_angle, main_is_top, left, top, ref);
-    project(n, angle, main_is_top, ref, pred);
+    /* Unfilled slots stay 0. A missed index then predicts a defined sample
+     * instead of whatever was on the stack. */
+    for (i = 0; i < 97; i++) {
+        ref[i] = 0;
+    }
+    status = build_ref(n, angle, inv_angle, main_is_top, left, top, ref);
+    if (status != HEVC_OK) {
+        return status;
+    }
+    status = project(n, angle, main_is_top, ref, pred);
+    if (status != HEVC_OK) {
+        return status;
+    }
 
     /* Modes 10 and 26 did not pass through reference smoothing. The edge
      * rewrite mixes the prediction with the unsmoothed neighbour. */

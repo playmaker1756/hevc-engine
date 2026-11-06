@@ -1,5 +1,7 @@
 #include "hevc/intra/predict.h"
 
+#include <stdint.h>
+
 /* Blend each sample from the two reference arms. */
 HevcStatus hevc_intra_predict_planar(int32_t n,
                                      const int32_t *left,
@@ -36,13 +38,19 @@ HevcStatus hevc_intra_predict_planar(int32_t n,
 
     for (y = 0; y < n; y++) {
         for (x = 0; x < n; x++) {
-            int32_t horizontal;
-            int32_t vertical;
+            int64_t horizontal;
+            int64_t vertical;
+            int64_t value;
 
-            /* Each pair of weights sums to n. */
-            horizontal = (n - 1 - x) * left[y + 1] + (x + 1) * right_ref;
-            vertical = (n - 1 - y) * top[x] + (y + 1) * bottom_ref;
-            pred[y * n + x] = (horizontal + vertical + n) >> shift;
+            /* Each pair of weights sums to n. The products are widened so
+             * two large reference samples cannot wrap the sum. */
+            horizontal = (int64_t)(n - 1 - x) * (int64_t)left[y + 1] + (int64_t)(x + 1) * (int64_t)right_ref;
+            vertical = (int64_t)(n - 1 - y) * (int64_t)top[x] + (int64_t)(y + 1) * (int64_t)bottom_ref;
+            value = (horizontal + vertical + n) >> shift;
+            if (value > 2147483647 || value < -2147483647 - 1) {
+                return HEVC_ERR_RANGE;
+            }
+            pred[y * n + x] = (int32_t)value;
         }
     }
     return HEVC_OK;

@@ -1,6 +1,7 @@
 #include "hevc/intra/reference.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Copy one strip. Used when clause 8.4.4.2.3 leaves the samples unfiltered. */
 static void copy_strip(int32_t n, const int32_t *left, const int32_t *top,
@@ -28,16 +29,16 @@ static void smooth_three_tap(int32_t n, const int32_t *left, const int32_t *top,
 
     arm = n * 2;
     /* Corner: the sample below it on the left arm and the first top sample. */
-    left_out[0] = (left[1] + 2 * left[0] + top[0] + 2) >> 2;
+    left_out[0] = (int32_t)(((int64_t)left[1] + 2 * (int64_t)left[0] + (int64_t)top[0] + 2) >> 2);
     for (i = 1; i < arm; i++) {
         /* y runs 0..2n-2. The three taps are y+1, y, and y-1. */
-        left_out[i] = (left[i + 1] + 2 * left[i] + left[i - 1] + 2) >> 2;
+        left_out[i] = (int32_t)(((int64_t)left[i + 1] + 2 * (int64_t)left[i] + (int64_t)left[i - 1] + 2) >> 2);
     }
     left_out[arm] = left[arm];
 
-    top_out[0] = (left[0] + 2 * top[0] + top[1] + 2) >> 2;
+    top_out[0] = (int32_t)(((int64_t)left[0] + 2 * (int64_t)top[0] + (int64_t)top[1] + 2) >> 2);
     for (i = 1; i < arm - 1; i++) {
-        top_out[i] = (top[i - 1] + 2 * top[i] + top[i + 1] + 2) >> 2;
+        top_out[i] = (int32_t)(((int64_t)top[i - 1] + 2 * (int64_t)top[i] + (int64_t)top[i + 1] + 2) >> 2);
     }
     top_out[arm - 1] = top[arm - 1];
 }
@@ -53,7 +54,7 @@ static int32_t strong_sample(int32_t t, int32_t corner, int32_t far)
 
     near_w = 63 - t;
     far_w = t + 1;
-    return (near_w * corner + far_w * far + 32) >> 6;
+    return (int32_t)(((int64_t)near_w * (int64_t)corner + (int64_t)far_w * (int64_t)far + 32) >> 6);
 }
 
 /* Filter the reference strip, or copy it when the specification leaves it alone. */
@@ -129,17 +130,18 @@ HevcStatus hevc_intra_reference_smooth(int32_t n,
 
     if (n == 32 && strong_intra_smoothing_enabled_flag == 1) {
         int32_t limit;
-        int32_t left_bend;
-        int32_t top_bend;
+        int64_t left_bend;
+        int64_t top_bend;
 
         /* 1 << (bit_depth - 5) is 8 at 8 bits. The arm is straight enough
-         * when the midpoint lies within that limit of the straight line. */
+         * when the midpoint lies within that limit of the straight line.
+         * The bend is widened so the subtraction cannot wrap. */
         limit = 1 << (bit_depth - 5);
-        left_bend = left[0] + left[64] - 2 * left[32];
+        left_bend = (int64_t)left[0] + (int64_t)left[64] - 2 * (int64_t)left[32];
         if (left_bend < 0) {
             left_bend = -left_bend;
         }
-        top_bend = left[0] + top[63] - 2 * top[31];
+        top_bend = (int64_t)left[0] + (int64_t)top[63] - 2 * (int64_t)top[31];
         if (top_bend < 0) {
             top_bend = -top_bend;
         }

@@ -23,8 +23,9 @@ HevcStatus hevc_rbsp_from_nal(const uint8_t *nal,
     out = 0;
     i = 2;
     while (i < nal_size) {
-        if (i + 2 < nal_size && nal[i] == 0 && nal[i + 1] == 0 && nal[i + 2] == 3) {
-            if (out + 2 > rbsp_cap) {
+        if (nal_size >= 3 && i <= nal_size - 3 && nal[i] == 0 && nal[i + 1] == 0 &&
+            nal[i + 2] == 3) {
+            if (rbsp_cap < 2 || out > rbsp_cap - 2) {
                 return HEVC_ERR_RANGE;
             }
             rbsp[out] = nal[i];
@@ -33,7 +34,7 @@ HevcStatus hevc_rbsp_from_nal(const uint8_t *nal,
             /* The 03 is the prevention byte. Skip it and the two zeros. */
             i = i + 3;
         } else {
-            if (out + 1 > rbsp_cap) {
+            if (rbsp_cap < 1 || out > rbsp_cap - 1) {
                 return HEVC_ERR_RANGE;
             }
             rbsp[out] = nal[i];

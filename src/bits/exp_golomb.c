@@ -1,6 +1,7 @@
 #include "hevc/bits/exp_golomb.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Read one bit. The shift distance is 7..0 inside the current byte, so the
  * shifted word is non-negative. */
@@ -10,10 +11,15 @@ static HevcStatus read_one(HevcBitCursor *cursor, int32_t *bit)
     int32_t shift;
     uint8_t byte;
 
-    byte_index = cursor->bit_pos >> 3;
-    if (byte_index < 0 || byte_index >= cursor->size_bytes) {
+    /* bit_pos is a signed index. A buffer longer than 2^28 bytes cannot
+     * be addressed that way, and bit_pos + 1 must not wrap. */
+    if (cursor->size_bytes < 0 || cursor->size_bytes > (INT32_MAX / 8)) {
         return HEVC_ERR_RANGE;
     }
+    if (cursor->bit_pos < 0 || cursor->bit_pos >= cursor->size_bytes * 8) {
+        return HEVC_ERR_RANGE;
+    }
+    byte_index = cursor->bit_pos >> 3;
     shift = 7 - (cursor->bit_pos & 7);
     byte = cursor->bytes[byte_index];
     *bit = (int32_t)((byte >> shift) & 1);

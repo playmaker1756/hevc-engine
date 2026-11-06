@@ -43,21 +43,82 @@ HevcStatus hevc_inv_scale_level(int32_t level,
     }
 
     /* BitDepth + Log2(n) + 10 - 15. Extended precision is off, so the
-     * transform range is 15 bits. */
+     * transform range is 15 bits. For 8..16 bit samples this shift is 5..16. */
     bd_shift = bit_depth + log2_n + 10 - 15;
+    if (bd_shift <= 0 || bd_shift > 30) {
+        return HEVC_ERR_RANGE;
+    }
     scale = k_level_scale[qp % 6];
     qp_div = qp / 6;
-    /* The multiply is wider than int32. The stored result is clipped back
-     * to the 16-bit coefficient range. */
-    acc = (int64_t)level * (int64_t)scale_weight * (int64_t)scale;
-    acc = acc << qp_div;
-    acc = acc + ((int64_t)1 << (bd_shift - 1));
+    /* A product that cannot fit in int64 is already outside the coefficient
+     * range, so it is clipped by sign and never shifted. A zero level stays
+     * zero no matter how large the weight is. */
+    if (level == 0) {
+        acc = 0;
+    } else {
+        int64_t mag_level;
+        int64_t weight_scale;
+        int32_t clipped;
+
+        mag_level = level;
+        if (level < 0) {
+            mag_level = -(int64_t)level;
+        }
+        if (level < 0) {
+            clipped = -32768;
+        } else {
+            clipped = 32767;
+        }
+        if ((int64_t)scale_weight > (INT64_MAX / (int64_t)scale)) {
+            *coeff = clipped;
+            return HEVC_OK;
+        }
+        weight_scale = (int64_t)scale_weight * (int64_t)scale;
+        if (mag_level > INT64_MAX / weight_scale) {
+            *coeff = clipped;
+            return HEVC_OK;
+        }
+        acc = (int64_t)level * weight_scale;
+    }
     if (acc >= 0) {
+        if (acc > (INT64_MAX >> qp_div)) {
+            *coeff = 32767;
+            return HEVC_OK;
+        }
+        acc = acc << qp_div;
+    } else {
+        /* Shift the magnitude. A negative signed left shift is undefined. */
+        int64_t mag;
+
+        mag = -acc;
+        if (mag > (INT64_MAX >> qp_div)) {
+            *coeff = -32768;
+            return HEVC_OK;
+        }
+        acc = -(mag << qp_div);
+    }
+    /* The rounding add stays inside int64. An accumulator that cannot take
+     * it is already far outside the coefficient range. */
+    if (acc > INT64_MAX - ((int64_t)1 << (bd_shift - 1))) {
+        *coeff = 32767;
+        return HEVC_OK;
+    }
+    acc = acc + ((int64_t)1 << (bd_shift - 1));
+    if (acc >= ((int64_t)32768 << bd_shift)) {
+        value = 32767;
+    } else if (acc <= -((int64_t)32768 << bd_shift)) {
+        value = -32768;
+    } else if (acc >= 0) {
         value = (int32_t)(acc >> bd_shift);
     } else {
-        /* Floor division of a negative accumulator. The magnitude fits in
-         * int32 after the rounding add for the levels this clause stores. */
-        value = hevc_floor_div_pow2((int32_t)acc, bd_shift);
+        uint64_t magnitude;
+        uint64_t bias;
+        uint64_t quot;
+
+        magnitude = (uint64_t)(-acc);
+        bias = ((uint64_t)1 << bd_shift) - 1;
+        quot = (magnitude + bias) >> bd_shift;
+        value = 0 - (int32_t)quot;
     }
     *coeff = hevc_clip3(-32768, 32767, value);
     return HEVC_OK;

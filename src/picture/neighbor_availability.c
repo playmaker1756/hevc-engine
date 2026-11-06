@@ -1,6 +1,7 @@
 #include "hevc/picture/neighbor_availability.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Address of one minimum transform block in quadtree order.
  * The value is recomputed from the formula instead of read from a
@@ -29,6 +30,17 @@ int32_t hevc_min_tb_addr_zs(const HevcPictureGeometry *g, int32_t x_tb, int32_t 
 
     /* How many times the minimum transform block fits along one tree edge. */
     diff = g->ctb_log2_size_y - g->min_tb_log2_size_y;
+    /* Reject a log2 that would shift off the end of a signed word, or a
+     * grid so wide that the shift would wrap and hide an out-of-picture x. */
+    if (g->ctb_log2_size_y < 0 || g->ctb_log2_size_y > 31 ||
+        diff < 0 || diff > 4 || g->min_tb_log2_size_y < 0 || g->min_tb_log2_size_y > 5) {
+        return -1;
+    }
+    if (g->pic_width_in_ctbs_y < 0 || g->pic_height_in_ctbs_y < 0 ||
+        g->pic_width_in_ctbs_y > (INT32_MAX >> diff) ||
+        g->pic_height_in_ctbs_y > (INT32_MAX >> diff)) {
+        return -1;
+    }
     /* The address grid covers whole trees, including a partial tree at the
      * picture edge. The shift is non-negative because the tree is at least
      * as large as the minimum transform block. */
@@ -38,10 +50,23 @@ int32_t hevc_min_tb_addr_zs(const HevcPictureGeometry *g, int32_t x_tb, int32_t 
         return -1;
     }
 
-    /* Which tree contains this 4x4. Both shifts are non-negative. */
+    /* Which tree contains this 4x4. Both shifts are non-negative.
+     * x_tb is bounded by the grid check above, and the log2 is at most 5. */
+    if (x_tb > (INT32_MAX >> g->min_tb_log2_size_y) ||
+        y_tb > (INT32_MAX >> g->min_tb_log2_size_y)) {
+        return -1;
+    }
     ctb_x = (x_tb << g->min_tb_log2_size_y) >> g->ctb_log2_size_y;
     ctb_y = (y_tb << g->min_tb_log2_size_y) >> g->ctb_log2_size_y;
-    ctb_addr_rs = g->pic_width_in_ctbs_y * ctb_y + ctb_x;
+    {
+        int64_t rs;
+
+        rs = (int64_t)g->pic_width_in_ctbs_y * (int64_t)ctb_y + (int64_t)ctb_x;
+        if (rs > INT32_MAX) {
+            return -1;
+        }
+        ctb_addr_rs = (int32_t)rs;
+    }
 
     /* Version 0 has one tile. Clause 6.5.1 would convert raster order to
      * tile-scan order here. With one tile that conversion is the identity.
@@ -50,6 +75,9 @@ int32_t hevc_min_tb_addr_zs(const HevcPictureGeometry *g, int32_t x_tb, int32_t 
 
     /* Leave room for every 4x4 inside this tree. diff * 2 is the log2 of
      * the number of 4x4s in the tree. */
+    if (ctb_addr_ts < 0 || ctb_addr_ts > (INT32_MAX >> (diff * 2))) {
+        return -1;
+    }
     addr = ctb_addr_ts << (diff * 2);
 
     /* Interleave x and y. Bit i of x adds m*m. Bit i of y adds 2*m*m.
@@ -83,6 +111,11 @@ int32_t hevc_neighbor_available(const HevcPictureGeometry *g,
     int32_t nb_addr;
 
     if (g == NULL || g->min_tb_size_y <= 0) {
+        return -1;
+    }
+    /* The shifts below are the divide by the minimum transform size.
+     * A negative or oversized log2 is not a shift this function may do. */
+    if (g->min_tb_log2_size_y < 0 || g->min_tb_log2_size_y > 31) {
         return -1;
     }
     /* The current sample is the caller's block. A position outside the

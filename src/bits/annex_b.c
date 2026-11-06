@@ -5,7 +5,7 @@
 /* True when the next three bytes are a start-code prefix. */
 static int32_t starts_with_3(const uint8_t *bytes, int32_t size, int32_t pos)
 {
-    if (pos + 3 > size) {
+    if (pos < 0 || size < 3 || pos > size - 3) {
         return 0;
     }
     if (bytes[pos] == 0 && bytes[pos + 1] == 0 && bytes[pos + 2] == 1) {
@@ -17,7 +17,7 @@ static int32_t starts_with_3(const uint8_t *bytes, int32_t size, int32_t pos)
 /* True when the next four bytes are 00 00 00 01. */
 static int32_t starts_with_4(const uint8_t *bytes, int32_t size, int32_t pos)
 {
-    if (pos + 4 > size) {
+    if (pos < 0 || size < 4 || pos > size - 4) {
         return 0;
     }
     if (bytes[pos] == 0 && bytes[pos + 1] == 0 && bytes[pos + 2] == 0 && bytes[pos + 3] == 1) {
@@ -79,7 +79,8 @@ HevcStatus hevc_annexb_next_nal(const uint8_t *bytes,
             break;
         }
         /* A run of three zeros is also a boundary, even without the one. */
-        if (end + 3 <= size && bytes[end] == 0 && bytes[end + 1] == 0 && bytes[end + 2] == 0) {
+        if (size >= 3 && end <= size - 3 && bytes[end] == 0 && bytes[end + 1] == 0 &&
+            bytes[end + 2] == 0) {
             break;
         }
         end = end + 1;

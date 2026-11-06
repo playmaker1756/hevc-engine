@@ -98,7 +98,7 @@ void hevc_test_cabac_transform(void)
     hevc_test_expect_i32("tile", "second column starts later", rs_to_ts[2], 4);
     hevc_test_expect_i32("tile", "left tile continues down", rs_to_ts[4], 2);
 
-    hevc_wpp_source(0, 64, 64, &x_nb, &y_nb);
+    hevc_test_expect_status("wpp", "source", hevc_wpp_source(0, 64, 64, &x_nb, &y_nb), HEVC_OK);
     hevc_test_expect_i32("wpp", "source x", x_nb, 64);
     hevc_test_expect_i32("wpp", "source y", y_nb, 0);
 
@@ -140,4 +140,19 @@ void hevc_test_cabac_transform(void)
     }
     cosine[0] = 8;
     hevc_test_expect_row("skip", "scaled 256 becomes 8", residual, cosine, 16);
+
+    col_width[0] = 2147483647;
+    col_width[1] = 2147483647;
+    row_height[0] = 1;
+    hevc_test_expect_status(
+        "tile", "width overflow",
+        hevc_ctb_tile_scan(col_width, 2, row_height, 1, rs_to_ts, ts_to_rs, 1), HEVC_ERR_RANGE);
+    hevc_test_expect_status("pcm", "sample wider than its field", hevc_pcm_sample(2, 8, 1, &sample), HEVC_ERR_RANGE);
+    hevc_test_expect_status("wpp", "x overflow", hevc_wpp_source(2147483647, 0, 64, &x_nb, &y_nb), HEVC_ERR_RANGE);
+
+    zeros[0] = 0;
+    cursor.bytes = zeros;
+    cursor.size_bytes = 300000000;
+    cursor.bit_pos = 0;
+    hevc_test_expect_status("bits", "buffer longer than the bit index", hevc_bit_read_u(&cursor, 1, &bin), HEVC_ERR_RANGE);
 }

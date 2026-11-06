@@ -1,5 +1,7 @@
 #include "hevc/intra/predict.h"
 
+#include <stdint.h>
+
 /* Fill one block with DC, then filter the luma edge when the size allows it. */
 HevcStatus hevc_intra_predict_dc(int32_t n,
                                  int32_t c_idx,
@@ -9,7 +11,7 @@ HevcStatus hevc_intra_predict_dc(int32_t n,
                                  const int32_t *top,
                                  int32_t *pred)
 {
-    int32_t sum;
+    int64_t sum;
     int32_t i;
     int32_t x;
     int32_t y;
@@ -40,7 +42,11 @@ HevcStatus hevc_intra_predict_dc(int32_t n,
         i = i >> 1;
     }
     shift = shift + 1;
-    dc = sum >> shift;
+    sum = sum >> shift;
+    if (sum > 2147483647) {
+        return HEVC_ERR_RANGE;
+    }
+    dc = (int32_t)sum;
 
     for (y = 0; y < n; y++) {
         for (x = 0; x < n; x++) {
@@ -59,12 +65,12 @@ HevcStatus hevc_intra_predict_dc(int32_t n,
 
     /* The DC edge filter is the shift itself. This clause does not clip it.
      * Corner uses the left sample at y = 0 and the top sample at x = 0. */
-    pred[0] = (left[1] + 2 * dc + top[0] + 2) >> 2;
+    pred[0] = (int32_t)(((int64_t)left[1] + 2 * (int64_t)dc + (int64_t)top[0] + 2) >> 2);
     for (x = 1; x < n; x++) {
-        pred[x] = (top[x] + 3 * dc + 2) >> 2;
+        pred[x] = (int32_t)(((int64_t)top[x] + 3 * (int64_t)dc + 2) >> 2);
     }
     for (y = 1; y < n; y++) {
-        pred[y * n] = (left[y + 1] + 3 * dc + 2) >> 2;
+        pred[y * n] = (int32_t)(((int64_t)left[y + 1] + 3 * (int64_t)dc + 2) >> 2);
     }
     return HEVC_OK;
 }

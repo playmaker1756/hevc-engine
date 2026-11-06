@@ -1,6 +1,7 @@
 #include "hevc/picture/coded_structure.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Infer or accept split_cu_flag for one coding-quadtree node. */
 HevcStatus hevc_split_cu(int32_t x0,
@@ -19,16 +20,24 @@ HevcStatus hevc_split_cu(int32_t x0,
     if (present == NULL || split == NULL) {
         return HEVC_ERR_ARG;
     }
-    if (log2_cb_size < 3 || log2_cb_size > 6 || min_cb_log2_size_y < 3) {
+    if (log2_cb_size < 3 || log2_cb_size > 6 || min_cb_log2_size_y < 3 ||
+        min_cb_log2_size_y > 6) {
         return HEVC_ERR_RANGE;
     }
+    /* The shift is a log2 already limited to 3..6, so size is 8, 16, 32, or 64. */
     size = 1 << log2_cb_size;
     inside = 0;
-    if (x0 >= 0 && y0 >= 0 && x0 + size <= pic_width && y0 + size <= pic_height &&
+    /* Compare by subtraction. x0 + size overflows when x0 is near the top
+     * of a signed word, and a wrapped sum would look like it fits. */
+    if (x0 >= 0 && y0 >= 0 && pic_width >= size && pic_height >= size &&
+        x0 <= pic_width - size && y0 <= pic_height - size &&
         log2_cb_size > min_cb_log2_size_y) {
         inside = 1;
     }
     if (inside == 1) {
+        if (coded_flag != 0 && coded_flag != 1) {
+            return HEVC_ERR_RANGE;
+        }
         *present = 1;
         *split = coded_flag;
         return HEVC_OK;
@@ -66,21 +75,23 @@ HevcStatus hevc_ctb_tile_scan(const int32_t *col_width,
         return HEVC_ERR_RANGE;
     }
 
+    /* Widths are added in a signed word. A sum that wraps would compare
+     * equal to a small map and the loops below would write past it. */
     pic_w = 0;
     for (col = 0; col < num_cols; col++) {
-        if (col_width[col] <= 0) {
+        if (col_width[col] <= 0 || pic_w > INT32_MAX - col_width[col]) {
             return HEVC_ERR_RANGE;
         }
         pic_w = pic_w + col_width[col];
     }
     pic_h = 0;
     for (row = 0; row < num_rows; row++) {
-        if (row_height[row] <= 0) {
+        if (row_height[row] <= 0 || pic_h > INT32_MAX - row_height[row]) {
             return HEVC_ERR_RANGE;
         }
         pic_h = pic_h + row_height[row];
     }
-    if (pic_w * pic_h != map_count) {
+    if ((int64_t)pic_w * (int64_t)pic_h != (int64_t)map_count) {
         return HEVC_ERR_RANGE;
     }
 
@@ -111,10 +122,17 @@ HevcStatus hevc_ctb_tile_scan(const int32_t *col_width,
 }
 
 /* Name the coding tree whose CABAC state starts the next wavefront row. */
-void hevc_wpp_source(int32_t x0, int32_t y0, int32_t ctb_size, int32_t *x_nb, int32_t *y_nb)
+HevcStatus hevc_wpp_source(int32_t x0, int32_t y0, int32_t ctb_size, int32_t *x_nb, int32_t *y_nb)
 {
+    if (x_nb == NULL || y_nb == NULL) {
+        return HEVC_ERR_ARG;
+    }
+    if (ctb_size < 0 || x0 > INT32_MAX - ctb_size || y0 < INT32_MIN + ctb_size) {
+        return HEVC_ERR_RANGE;
+    }
     *x_nb = x0 + ctb_size;
     *y_nb = y0 - ctb_size;
+    return HEVC_OK;
 }
 
 /* Shift a PCM sample up to the picture bit depth. */
@@ -129,6 +147,11 @@ HevcStatus hevc_pcm_sample(int32_t pcm_sample,
         return HEVC_ERR_ARG;
     }
     if (pcm_bit_depth < 1 || pcm_bit_depth > bit_depth || bit_depth > 16) {
+        return HEVC_ERR_RANGE;
+    }
+    /* pcm_bit_depth is 1..16, so this shift stays inside a signed word.
+     * A sample outside that width is rejected before the second shift. */
+    if (pcm_sample < 0 || pcm_sample >= (1 << pcm_bit_depth)) {
         return HEVC_ERR_RANGE;
     }
     shift = bit_depth - pcm_bit_depth;

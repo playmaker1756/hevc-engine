@@ -3,6 +3,7 @@
 #include "hevc/picture/neighbor_availability.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* True when n is a transform size this predictor accepts. */
 static int32_t block_size_ok(int32_t n)
@@ -82,7 +83,19 @@ static HevcStatus gather_arm(const HevcPictureGeometry *g,
         }
         available[i] = avail;
         if (avail == 1) {
-            samples[i] = plane[y_cmp * stride + x_cmp];
+            int64_t index;
+
+            /* Availability is in luma samples. The plane index is still a
+             * separate multiply: a wrapped y * stride would read off the
+             * front of the buffer. */
+            if (y_cmp < 0 || x_cmp < 0 || x_cmp >= stride) {
+                return HEVC_ERR_RANGE;
+            }
+            index = (int64_t)y_cmp * (int64_t)stride + (int64_t)x_cmp;
+            if (index > INT32_MAX) {
+                return HEVC_ERR_RANGE;
+            }
+            samples[i] = plane[(int32_t)index];
         } else {
             /* A missing sample must not be read from the plane. Substitution
              * looks at the available flag, not at this zero. */
@@ -124,6 +137,15 @@ HevcStatus hevc_intra_reference_gather(const HevcPictureGeometry *g,
         return HEVC_ERR_RANGE;
     }
     if (c_idx != 0 && c_idx != 1 && c_idx != 2) {
+        return HEVC_ERR_RANGE;
+    }
+    /* x0 + 2n and y0 + 2n stay inside a signed word. A negative origin is
+     * not a block in this picture. Chroma scaling is 1 or 2. */
+    if (x0 < 0 || y0 < 0 || x0 > INT32_MAX - 64 || y0 > INT32_MAX - 64) {
+        return HEVC_ERR_RANGE;
+    }
+    if ((g->sub_width_c != 1 && g->sub_width_c != 2) ||
+        (g->sub_height_c != 1 && g->sub_height_c != 2)) {
         return HEVC_ERR_RANGE;
     }
 

@@ -57,6 +57,12 @@ void hevc_test_picture_geometry(void)
                             hevc_picture_geometry_derive(NULL), HEVC_ERR_ARG);
 
     hevc_test_fill_version0(&g, 64, 64);
+    g.conf_win_left_offset = 2147483647;
+    g.conf_win_right_offset = 1;
+    hevc_test_expect_status("picture geometry", "a crop offset that overflows a signed sum is rejected",
+                            hevc_picture_geometry_derive(&g), HEVC_ERR_RANGE);
+
+    hevc_test_fill_version0(&g, 64, 64);
     g.min_tb_log2_size_y = 3;
     hevc_test_expect_status("picture geometry", "minimum transform block equal to the coding block is rejected",
                             hevc_picture_geometry_derive(&g), HEVC_ERR_RANGE);

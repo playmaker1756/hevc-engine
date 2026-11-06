@@ -37,7 +37,7 @@ HevcStatus hevc_ctb_tile_scan(const int32_t *col_width,
  * above: one tree to the right and one tree up. The caller tests availability
  * with clause 6.4.1. y_nb is negative on the first row.
  */
-void hevc_wpp_source(int32_t x0, int32_t y0, int32_t ctb_size, int32_t *x_nb, int32_t *y_nb);
+HevcStatus hevc_wpp_source(int32_t x0, int32_t y0, int32_t ctb_size, int32_t *x_nb, int32_t *y_nb);
 
 /* Equation 8-12. Place one PCM sample into the reconstructed picture.
  * The shift is BitDepth minus PcmBitDepth and is non-negative.

@@ -1,6 +1,7 @@
 #include "hevc/picture/geometry.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Ceiling of n/d for positive n and d.
  * (n + d - 1) / d is that ceiling in integer division. A floating divide
@@ -20,8 +21,8 @@ HevcStatus hevc_picture_geometry_derive(HevcPictureGeometry *g)
     int32_t min_cb;
     int32_t ctb;
     int32_t min_tb;
-    int32_t crop_w;
-    int32_t crop_h;
+    int64_t crop_w64;
+    int64_t crop_h64;
 
     if (g == NULL) {
         return HEVC_ERR_ARG;
@@ -74,11 +75,13 @@ HevcStatus hevc_picture_geometry_derive(HevcPictureGeometry *g)
         return HEVC_ERR_RANGE;
     }
 
-    /* Offsets are in chroma samples. The luma rows and columns they remove
-     * must leave at least one decoded sample. */
-    crop_w = g->sub_width_c * (g->conf_win_left_offset + g->conf_win_right_offset);
-    crop_h = g->sub_height_c * (g->conf_win_top_offset + g->conf_win_bottom_offset);
-    if (crop_w >= g->pic_width_in_luma_samples || crop_h >= g->pic_height_in_luma_samples) {
+    /* Offsets are in chroma samples. The product is formed in 64 bits so a
+     * huge offset cannot wrap and look smaller than the picture. */
+    crop_w64 = (int64_t)g->sub_width_c *
+               ((int64_t)g->conf_win_left_offset + (int64_t)g->conf_win_right_offset);
+    crop_h64 = (int64_t)g->sub_height_c *
+               ((int64_t)g->conf_win_top_offset + (int64_t)g->conf_win_bottom_offset);
+    if (crop_w64 >= g->pic_width_in_luma_samples || crop_h64 >= g->pic_height_in_luma_samples) {
         return HEVC_ERR_RANGE;
     }
 

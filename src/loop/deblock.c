@@ -17,7 +17,8 @@ static const int32_t k_tc_prime[54] = {
     5, 5, 6, 6, 7, 8, 9, 10, 11, 13, 14, 16, 18, 20, 22, 24
 };
 
-/* 2 * value without shifting a negative signed value. */
+/* 2 * value without shifting a negative signed value.
+ * The caller has already limited value to -6..6. */
 static int32_t twice(int32_t value)
 {
     if (value >= 0) {
@@ -32,6 +33,20 @@ static int32_t abs_i32(int32_t value)
         return -value;
     }
     return value;
+}
+
+/* 1 when every sample sits in 0..max_sample. A sample outside that range
+ * can overflow the later additions. */
+static int32_t samples_in_range(const int32_t *samples, int32_t count, int32_t max_sample)
+{
+    int32_t i;
+
+    for (i = 0; i < count; i++) {
+        if (samples[i] < 0 || samples[i] > max_sample) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* Table 8-10 for 4:2:0. Below 30 the chroma QP equals the index.
@@ -99,6 +114,22 @@ HevcStatus hevc_deblock_luma_segment(int32_t p[4][4],
     if (bit_depth < 8 || bit_depth > 16 || b_s < 0 || b_s > 2) {
         return HEVC_ERR_RANGE;
     }
+    if (qp_p < 0 || qp_p > 51 || qp_q < 0 || qp_q > 51) {
+        return HEVC_ERR_RANGE;
+    }
+    if (beta_offset_div2 < -6 || beta_offset_div2 > 6 ||
+        tc_offset_div2 < -6 || tc_offset_div2 > 6) {
+        return HEVC_ERR_RANGE;
+    }
+    {
+        int32_t max_sample;
+
+        max_sample = (1 << bit_depth) - 1;
+        if (samples_in_range(&p[0][0], 16, max_sample) == 0 ||
+            samples_in_range(&q[0][0], 16, max_sample) == 0) {
+            return HEVC_ERR_RANGE;
+        }
+    }
     if (b_s == 0) {
         return HEVC_OK;
     }
@@ -126,7 +157,6 @@ HevcStatus hevc_deblock_luma_segment(int32_t p[4][4],
     if (d < beta) {
         int32_t d_sam0;
         int32_t d_sam3;
-        int32_t gate;
 
         d_e = 1;
         /* Lines 0 and 3 vote. Lines 1 and 2 are filtered with that vote. */
@@ -241,12 +271,25 @@ HevcStatus hevc_deblock_chroma_segment(int32_t p0[4],
     if (bit_depth < 8 || bit_depth > 16) {
         return HEVC_ERR_RANGE;
     }
+    if (qp_p < 0 || qp_p > 51 || qp_q < 0 || qp_q > 51) {
+        return HEVC_ERR_RANGE;
+    }
+    if (c_qp_pic_offset < -12 || c_qp_pic_offset > 12 ||
+        tc_offset_div2 < -6 || tc_offset_div2 > 6) {
+        return HEVC_ERR_RANGE;
+    }
+    max_sample = (1 << bit_depth) - 1;
+    if (samples_in_range(p0, 4, max_sample) == 0 ||
+        samples_in_range(p1, 4, max_sample) == 0 ||
+        samples_in_range(q0, 4, max_sample) == 0 ||
+        samples_in_range(q1, 4, max_sample) == 0) {
+        return HEVC_ERR_RANGE;
+    }
 
     q_pi = ((qp_q + qp_p + 1) >> 1) + c_qp_pic_offset;
     qp_c = chroma_qp(q_pi);
     q_tc = hevc_clip3(0, 53, qp_c + 2 + twice(tc_offset_div2));
     tc = k_tc_prime[q_tc] << (bit_depth - 8);
-    max_sample = (1 << bit_depth) - 1;
 
     for (k = 0; k < 4; k++) {
         int32_t delta;

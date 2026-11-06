@@ -40,6 +40,19 @@ static const int32_t k_trans_lps[64] = {
     33, 33, 34, 34, 35, 35, 35, 36, 36, 36, 37, 37, 37, 38, 38, 63
 };
 
+/* The engine keeps offset below range, and range in 2..510.
+ * A broken pair is rejected before a shift can walk off the word. */
+static HevcStatus engine_in_range(const HevcCabacEngine *engine)
+{
+    if (engine->range < 2 || engine->range > 510) {
+        return HEVC_ERR_RANGE;
+    }
+    if (engine->offset < 0 || engine->offset >= engine->range) {
+        return HEVC_ERR_RANGE;
+    }
+    return HEVC_OK;
+}
+
 /* Double the range and shift one bit into the offset until the range reaches 256. */
 static HevcStatus renorm(HevcCabacEngine *engine)
 {
@@ -146,6 +159,9 @@ HevcStatus hevc_cabac_decision(HevcCabacEngine *engine, HevcCabacContext *ctx, i
     if (engine == NULL || engine->cursor == NULL || ctx == NULL || bin == NULL) {
         return HEVC_ERR_ARG;
     }
+    if (engine_in_range(engine) != HEVC_OK) {
+        return HEVC_ERR_RANGE;
+    }
     if (ctx->p_state < 0 || ctx->p_state > 63) {
         return HEVC_ERR_RANGE;
     }
@@ -182,6 +198,9 @@ HevcStatus hevc_cabac_bypass(HevcCabacEngine *engine, int32_t *bin)
     if (engine == NULL || engine->cursor == NULL || bin == NULL) {
         return HEVC_ERR_ARG;
     }
+    if (engine_in_range(engine) != HEVC_OK) {
+        return HEVC_ERR_RANGE;
+    }
     status = hevc_bit_read_u(engine->cursor, 1, &bit);
     if (status != HEVC_OK) {
         return status;
@@ -201,6 +220,9 @@ HevcStatus hevc_cabac_terminate(HevcCabacEngine *engine, int32_t *bin, int32_t *
 {
     if (engine == NULL || engine->cursor == NULL || bin == NULL || finished == NULL) {
         return HEVC_ERR_ARG;
+    }
+    if (engine_in_range(engine) != HEVC_OK) {
+        return HEVC_ERR_RANGE;
     }
     engine->range = engine->range - 2;
     if (engine->offset >= engine->range) {
