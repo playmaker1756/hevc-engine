@@ -1,0 +1,26 @@
+---
+description: C style for the whole codec. Core and tests stay in C.
+alwaysApply: true
+---
+
+# C coding
+
+The codec and its tests are C. Do not add C++ unless the user agrees in this conversation.
+
+- Name a file for the problem it solves. Put files that solve one problem in one directory.
+- Use `stdint.h` widths (`int32_t`) for values the specification treats as integers. Do not use bare `int` for those values.
+- Write each operation out. Do not hide a branch, a shift, or a bound in a ternary, a macro, or a boolean coercion such as `!flag`.
+- Comment every function with the result it must produce.
+- Comment every operation with what it is achieving. When a shorter form or a spec process was narrowed, state that tradeoff in the same comment.
+- Apply shifts only to non-negative values. Where a shift stands in for an arithmetic shift in the specification, say that the value is non-negative.
+- Add a helper only when it names a problem. Do not add one that only renames a line.
+- Portable C11. No compiler extensions.
+
+```c
+/* Reject a neighbour decoded later. An equal address stays available:
+ * that 4x4 is the current one, so it has been reached. */
+if (nb_addr > curr_addr) {
+    return 0;
+}
+return 1;
+```
